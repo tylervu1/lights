@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Control Govee bulbs from the command line.
+
+Usage:
+  lights                        show all bulbs and their state
+  lights refresh                re-fetch device list (after adding a bulb)
+  lights <target> on|off        power
+  lights <target> <1-100>       brightness percent
+  lights <target> color <hex|name>   e.g. color ff8800, color red
+  lights <target> temp <2000-9000|warm|neutral|cool>
+
+<target> is "all", a room from ~/.config/govee/rooms.json, or a
+case-insensitive substring of a bulb name (e.g. "standing").
+
+Config:
+  ~/.config/govee/config.env   GOVEE_API_KEY=...
+  ~/.config/govee/rooms.json   {"room-name": ["Bulb Name", ...]}
+
+Bulbs with LAN Control enabled in the Govee app are discovered via UDP
+multicast and commanded locally (instant); everything else goes through
+the cloud API.
+"""
+
+import json
+import os
+import socket
+import sys
+import time
+import urllib.request
+import uuid
+
+CONF_DIR = os.path.expanduser("~/.config/govee")
+API = "https://openapi.api.govee.com/router/api/v1"
+CACHE = os.path.join(CONF_DIR, "devices-cache.json")
+
+COLORS = {
+    "red": 0xFF0000, "green": 0x00FF00, "blue": 0x0000FF,
+    "white": 0xFFFFFF, "orange": 0xFF8C00, "yellow": 0xFFD700,
+    "purple": 0x800080, "pink": 0xFF69B4, "teal": 0x008080,
+}
+TEMPS = {"warm": 2700, "neutral": 4000, "cool": 6500}
+
+
+def api_key():
+    try:
+        with open(os.path.join(CONF_DIR, "config.env")) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("GOVEE_API_KEY="):
+                    return line.split("=", 1)[1].strip()
+    except FileNotFoundError:
+        pass
+    sys.exit("No API key found in ~/.config/govee/config.env")
+
+
+def api_call(path, body, key):
+    req = urllib.request.Request(
+        API + path,
+        data=json.dumps(body).encode(),
+        headers={"Govee-API-Key": key, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)
+
+
+def get_devices(key):
+    # Cache the device list for a day; it rarely changes.
+    try:
+        st = os.stat(CACHE)
+        if time.time() - st.st_mtime < 86400:
+            with open(CACHE) as f:
+                return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    req = urllib.request.Request(API + "/user/devices",
+                                 headers={"Govee-API-Key": key})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        devices = json.load(resp)["data"]
+    with open(CACHE, "w") as f:
+        json.dump(devices, f)
+    return devices
+
+
+def lan_discover(wait=1.5):
+    """Return {device_id: ip} for bulbs with LAN Control enabled."""
+    found = {}
+    try:
+        recv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        recv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        recv.bind(("0.0.0.0", 4002))
+        recv.settimeout(0.3)
+        send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        send.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+        msg = json.dumps(
+            {"msg": {"cmd": "scan", "data": {"account_topic": "reserve"}}}
+        ).encode()
+        send.sendto(msg, ("239.255.255.250", 4001))
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            try:
+                data, _ = recv.recvfrom(4096)
+                m = json.loads(data.decode())["msg"]
+                if m.get("cmd") == "scan":
+                    found[m["data"]["device"]] = m["data"]["ip"]
+            except (socket.timeout, ValueError, KeyError):
+                continue
+    except OSError:
+        pass
+    return found
+
+
+def lan_send(ip, cmd, data):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.sendto(json.dumps({"msg": {"cmd": cmd, "data": data}}).encode(),
+             (ip, 4003))
+
+
+def load_rooms():
+    try:
+        with open(os.path.join(CONF_DIR, "rooms.json")) as f:
+            rooms = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    return {k.lower(): v for k, v in rooms.items() if not k.startswith("_")}
+
+
+def pick_targets(devices, target):
+    target = target.lower()
+    if target == "all":
+        return devices
+    rooms = load_rooms()
+    if target in rooms:
+        names = {n.lower() for n in rooms[target]}
+        picked = [d for d in devices if d["deviceName"].lower() in names]
+        missing = names - {d["deviceName"].lower() for d in picked}
+        for m in missing:
+            print(f"warning: '{m}' in rooms.json doesn't match any bulb",
+                  file=sys.stderr)
+        return picked
+    picked = [d for d in devices if target in d["deviceName"].lower()]
+    return picked
+
+
+def control(dev, key, lan_ips, instance, value, lan_cmd=None, lan_data=None):
+    ip = lan_ips.get(dev["device"])
+    if ip and lan_cmd:
+        lan_send(ip, lan_cmd, lan_data)
+        return "lan"
+    body = {
+        "requestId": str(uuid.uuid4()),
+        "payload": {
+            "sku": dev["sku"],
+            "device": dev["device"],
+            "capability": instance | {"value": value},
+        },
+    }
+    api_call("/device/control", body, key)
+    return "cloud"
+
+
+def show_status(devices, key):
+    lan_ips = lan_discover()
+    for dev in devices:
+        body = {"requestId": str(uuid.uuid4()),
+                "payload": {"sku": dev["sku"], "device": dev["device"]}}
+        try:
+            caps = api_call("/device/state", body, key)["payload"]["capabilities"]
+        except Exception as e:
+            print(f"{dev['deviceName']}: error ({e})")
+            continue
+        vals = {}
+        for c in caps:
+            inst, state = c.get("instance"), c.get("state", {})
+            vals[inst] = state.get("value")
+        power = "on" if vals.get("powerSwitch") == 1 else "off"
+        online = vals.get("online")
+        bits = [f"{power:>3}"]
+        if vals.get("brightness") is not None:
+            bits.append(f"{vals['brightness']}%")
+        if online is False:
+            bits.append("(offline)")
+        if dev["device"] in lan_ips:
+            bits.append("[lan]")
+        print(f"{dev['deviceName']:<28} {' '.join(bits)}")
+
+
+def main():
+    args = sys.argv[1:]
+    key = api_key()
+    if args and args[0].lower() == "refresh":
+        try:
+            os.remove(CACHE)
+        except FileNotFoundError:
+            pass
+        devices = get_devices(key)
+        for d in devices:
+            print(d["deviceName"])
+        print(f"refreshed: {len(devices)} bulbs")
+        return
+    devices = get_devices(key)
+
+    if not args:
+        show_status(devices, key)
+        return
+    if len(args) < 2:
+        sys.exit(__doc__.strip())
+
+    target, action, *rest = args
+    picked = pick_targets(devices, target)
+    if not picked:
+        names = ", ".join(d["deviceName"] for d in devices)
+        rooms = ", ".join(load_rooms()) or "(none defined)"
+        sys.exit(f"No bulbs match '{target}'.\nBulbs: {names}\nRooms: {rooms}")
+
+    lan_ips = lan_discover()
+    action = action.lower()
+
+    # Resolve the action once, then fire at every target in parallel so
+    # the bulbs change together instead of one HTTP round-trip apart.
+    if action in ("on", "off"):
+        v = 1 if action == "on" else 0
+        plan = ({"type": "devices.capabilities.on_off",
+                 "instance": "powerSwitch"}, v, "turn", {"value": v})
+    elif action.isdigit() and 1 <= int(action) <= 100:
+        v = int(action)
+        plan = ({"type": "devices.capabilities.range",
+                 "instance": "brightness"}, v, "brightness", {"value": v})
+    elif action == "color" and rest:
+        arg = rest[0].lower().lstrip("#")
+        rgb = COLORS.get(arg)
+        if rgb is None:
+            try:
+                rgb = int(arg, 16)
+            except ValueError:
+                sys.exit(f"Unknown color '{rest[0]}'. "
+                         f"Use a hex value or one of: {', '.join(COLORS)}")
+        plan = ({"type": "devices.capabilities.color_setting",
+                 "instance": "colorRgb"}, rgb,
+                "colorwc", {"color": {"r": rgb >> 16,
+                                      "g": (rgb >> 8) & 0xFF,
+                                      "b": rgb & 0xFF}})
+    elif action == "temp" and rest:
+        arg = rest[0].lower()
+        kelvin = TEMPS.get(arg)
+        if kelvin is None:
+            try:
+                kelvin = int(arg)
+            except ValueError:
+                sys.exit("temp takes 2000-9000, or warm/neutral/cool")
+        kelvin = max(2000, min(9000, kelvin))
+        plan = ({"type": "devices.capabilities.color_setting",
+                 "instance": "colorTemperatureK"}, kelvin,
+                "colorwc", {"colorTemInKelvin": kelvin})
+    else:
+        sys.exit(__doc__.strip())
+
+    cap, value, lan_cmd, lan_data = plan
+
+    def send(dev):
+        try:
+            via = control(dev, key, lan_ips, cap, value, lan_cmd, lan_data)
+            return f"{dev['deviceName']}: {action} {' '.join(rest)} [{via}]"
+        except Exception as e:
+            return f"{dev['deviceName']}: ERROR ({e})"
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=len(picked)) as ex:
+        for line in ex.map(send, picked):
+            print(line)
+
+
+if __name__ == "__main__":
+    main()
