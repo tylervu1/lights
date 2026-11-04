@@ -14,9 +14,16 @@ No dependencies — Python 3 stdlib only.
   cards, brightness/temperature sliders, HSV color wheel, Govee's full
   scene catalog, per-bulb controls. Optimistic updates, so every tap
   responds instantly.
+- **Presets** — snapshot every bulb's state and restore it with one tap
+  (web UI), `lights preset <name>` (CLI), or a URL. Great for scenes like
+  "Movie" or "Cooking" that mix per-room brightness and color.
 - **Energy tracking** — estimated per-bulb consumption integrated from
   state history (no metering hardware needed): daily/weekly/monthly
-  totals, cost estimates, 7-day chart, per-room breakdown.
+  totals, cost estimates, 7-day/24-hour charts, week-over-week change,
+  top-consuming bulb, and a per-room breakdown.
+- **Siri / iOS Shortcuts / menu bar** — `GET /api/go` drives everything
+  from a plain URL, so a Shortcut, a Siri phrase, or the included SwiftBar
+  menu-bar plugin can flip rooms and apply presets.
 - **LAN first** — bulbs with LAN Control enabled in the Govee app are
   commanded over local UDP (instant, works without internet); everything
   else goes through the cloud API. The API key never leaves your machine.
@@ -45,7 +52,29 @@ lights <target> on|off        power
 lights <target> <1-100>       brightness percent
 lights <target> color <hex|name>
 lights <target> temp <2000-9000|warm|neutral|cool>
+lights preset                 list saved presets
+lights preset <name>          restore a preset
+lights preset save <name>     snapshot the current state of every bulb
 ```
+
+## Siri, Shortcuts & menu bar
+
+`GET /api/go` takes URL parameters so any tool that can open a URL can
+control the lights:
+
+```
+http://<your-ip>:8777/api/go?preset=movie
+http://<your-ip>:8777/api/go?target=kitchen&action=power&value=off
+http://<your-ip>:8777/api/go?target=all&action=brightness&value=40
+```
+
+- **iOS Shortcuts / Siri** — make a Shortcut with a single "Get Contents
+  of URL" action pointing at one of the above, name it (e.g. "Movie
+  Night"), and Siri runs it. Chain it into automations (arrive home, time
+  of day, etc.).
+- **Menu bar (macOS)** — install [SwiftBar](https://swiftbar.app), point
+  its plugin folder at `menubar/`, and `lights.30s.sh` adds a menu-bar
+  dropdown with per-room toggles, brightness presets, and saved presets.
 
 ## Notes
 
