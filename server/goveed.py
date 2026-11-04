@@ -301,6 +301,80 @@ def energy_summary():
             "since": min(data) if data else None}
 
 
+# ---- presets: snapshot every bulb's state, restore it later ----
+
+PRESETS_FILE = os.path.join(CONF_DIR, "presets.json")
+_presets_lock = threading.Lock()
+
+
+def load_presets():
+    try:
+        with open(PRESETS_FILE) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_preset(name):
+    devices = get_devices()
+    ips = lan_ips()
+    with ThreadPoolExecutor(max_workers=max(1, len(devices))) as ex:
+        states = list(ex.map(lambda d: state_one(d, ips), devices))
+    update_believed(states)
+    snap = {s["name"]: {"power": s["power"], "brightness": s["brightness"],
+                        "tempK": s["tempK"], "colorRgb": s["colorRgb"]}
+            for s in states if "error" not in s}
+    with _presets_lock:
+        presets = load_presets()
+        presets[name] = {"saved": time.strftime("%Y-%m-%d %H:%M"),
+                         "bulbs": snap}
+        with open(PRESETS_FILE, "w") as f:
+            json.dump(presets, f, indent=1)
+    return {"name": name, "bulbs": len(snap)}
+
+
+def delete_preset(name):
+    with _presets_lock:
+        presets = load_presets()
+        presets.pop(name, None)
+        with open(PRESETS_FILE, "w") as f:
+            json.dump(presets, f, indent=1)
+
+
+def apply_preset(name):
+    p = load_presets().get(name)
+    if not p:
+        raise ValueError(f"no preset named '{name}'")
+    devices = {d["deviceName"]: d for d in get_devices()}
+    ips = lan_ips()
+
+    def one(item):
+        nm, st = item
+        d = devices.get(nm)
+        if not d:
+            return {"name": nm, "via": "missing"}
+        try:
+            if not st.get("power"):
+                control_one(d, make_plan("power", False), ips)
+                believed_apply_control([d], "power", False)
+            else:
+                control_one(d, make_plan("power", True), ips)
+                believed_apply_control([d], "power", True)
+                if st.get("brightness"):
+                    control_one(d, make_plan("brightness", st["brightness"]), ips)
+                    believed_apply_control([d], "brightness", st["brightness"])
+                if st.get("colorRgb"):
+                    control_one(d, make_plan("color", st["colorRgb"]), ips)
+                elif st.get("tempK"):
+                    control_one(d, make_plan("temp", st["tempK"]), ips)
+            return {"name": nm, "via": "ok"}
+        except Exception as e:
+            return {"name": nm, "via": f"error: {e}"}
+
+    with ThreadPoolExecutor(max_workers=max(1, len(p["bulbs"]))) as ex:
+        return list(ex.map(one, p["bulbs"].items()))
+
+
 # ---- command plumbing ----
 
 def make_plan(action, value):
@@ -419,6 +493,47 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"rooms": load_rooms(), "devices": states})
         elif url.path == "/api/energy":
             self._json(energy_summary())
+        elif url.path == "/api/presets":
+            self._json({"presets": {k: {"saved": v.get("saved"),
+                                        "bulbs": len(v.get("bulbs", {}))}
+                                    for k, v in load_presets().items()}})
+        elif url.path == "/api/go":
+            # GET endpoint for iOS Shortcuts / Siri / curl one-liners:
+            #   /api/go?preset=movie
+            #   /api/go?target=kitchen&action=power&value=on
+            q = urllib.parse.parse_qs(url.query)
+            try:
+                if "preset" in q:
+                    apply_preset(q["preset"][0])
+                    msg = f"preset '{q['preset'][0]}' applied"
+                else:
+                    target = q["target"][0]
+                    action = q["action"][0]
+                    value = q.get("value", [None])[0]
+                    if action == "power":
+                        value = str(value).lower() in ("1", "on", "true")
+                    elif action in ("brightness", "temp"):
+                        value = int(value)
+                    elif action == "color":
+                        value = int(str(value).lstrip("#"), 16)
+                    devs = pick(get_devices(), target)
+                    if not devs:
+                        raise ValueError(f"no bulbs match '{target}'")
+                    plan = make_plan(action, value)
+                    believed_apply_control(devs, action, value)
+                    ips = lan_ips()
+                    with ThreadPoolExecutor(max_workers=len(devs)) as ex:
+                        list(ex.map(lambda d: control_one(d, plan, ips), devs))
+                    msg = f"{target}: {action} ok ({len(devs)} bulbs)"
+                body = msg.encode()
+                self.send_response(200)
+            except Exception as e:
+                body = f"error: {e}".encode()
+                self.send_response(400)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif url.path == "/api/scenes":
             q = urllib.parse.parse_qs(url.query)
             try:
@@ -432,6 +547,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
+        if self.path == "/api/preset":
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                req = json.loads(self.rfile.read(n))
+                op, name = req.get("op", "apply"), req["name"]
+                if op == "save":
+                    self._json({"ok": True, **save_preset(name)})
+                elif op == "delete":
+                    delete_preset(name)
+                    self._json({"ok": True})
+                else:
+                    self._json({"ok": True, "results": apply_preset(name)})
+            except Exception as e:
+                self._json({"error": str(e)}, 500)
+            return
         if self.path != "/api/control":
             self.send_error(404)
             return

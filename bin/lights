@@ -8,6 +8,9 @@ Usage:
   lights <target> <1-100>       brightness percent
   lights <target> color <hex|name>   e.g. color ff8800, color red
   lights <target> temp <2000-9000|warm|neutral|cool>
+  lights preset                 list saved presets
+  lights preset <name>          restore a preset
+  lights preset save <name>     snapshot current state of every bulb
 
 <target> is "all", a room from ~/.config/govee/rooms.json, or a
 case-insensitive substring of a bulb name (e.g. "standing").
@@ -198,6 +201,99 @@ def main():
         print(f"refreshed: {len(devices)} bulbs")
         return
     devices = get_devices(key)
+
+    if args and args[0].lower() == "preset":
+        pfile = os.path.join(CONF_DIR, "presets.json")
+        try:
+            with open(pfile) as f:
+                presets = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            presets = {}
+        if len(args) == 1:
+            for n, p in presets.items():
+                print(f"{n}  ({len(p.get('bulbs', {}))} bulbs, "
+                      f"saved {p.get('saved', '?')})")
+            if not presets:
+                print("no presets yet; save one with: lights preset save <name>")
+            return
+        if args[1].lower() == "save":
+            if len(args) < 3:
+                sys.exit("usage: lights preset save <name>")
+            name = " ".join(args[2:])
+            snap = {}
+            for dev in devices:
+                body = {"requestId": str(uuid.uuid4()),
+                        "payload": {"sku": dev["sku"], "device": dev["device"]}}
+                try:
+                    caps = api_call("/device/state", body,
+                                    key)["payload"]["capabilities"]
+                except Exception as e:
+                    print(f"{dev['deviceName']}: skipped ({e})", file=sys.stderr)
+                    continue
+                st = {c.get("instance"): c.get("state", {}).get("value")
+                      for c in caps}
+                snap[dev["deviceName"]] = {
+                    "power": st.get("powerSwitch") == 1,
+                    "brightness": st.get("brightness"),
+                    "tempK": st.get("colorTemperatureK") or None,
+                    "colorRgb": st.get("colorRgb"),
+                }
+            presets[name] = {"saved": time.strftime("%Y-%m-%d %H:%M"),
+                             "bulbs": snap}
+            with open(pfile, "w") as f:
+                json.dump(presets, f, indent=1)
+            print(f"saved '{name}' ({len(snap)} bulbs)")
+            return
+        name = " ".join(args[1:])
+        p = presets.get(name)
+        if p is None:
+            sys.exit(f"no preset '{name}'. "
+                     f"Saved: {', '.join(presets) or '(none)'}")
+        byname = {d["deviceName"]: d for d in devices}
+        lan = lan_discover()
+
+        def apply_one(item):
+            nm, st = item
+            dev = byname.get(nm)
+            if not dev:
+                return f"{nm}: not found"
+            try:
+                if not st.get("power"):
+                    control(dev, key, lan,
+                            {"type": "devices.capabilities.on_off",
+                             "instance": "powerSwitch"}, 0,
+                            "turn", {"value": 0})
+                    return f"{nm}: off"
+                control(dev, key, lan,
+                        {"type": "devices.capabilities.on_off",
+                         "instance": "powerSwitch"}, 1, "turn", {"value": 1})
+                if st.get("brightness"):
+                    control(dev, key, lan,
+                            {"type": "devices.capabilities.range",
+                             "instance": "brightness"}, st["brightness"],
+                            "brightness", {"value": st["brightness"]})
+                if st.get("colorRgb"):
+                    rgb = st["colorRgb"]
+                    control(dev, key, lan,
+                            {"type": "devices.capabilities.color_setting",
+                             "instance": "colorRgb"}, rgb,
+                            "colorwc", {"color": {"r": rgb >> 16,
+                                                  "g": (rgb >> 8) & 0xFF,
+                                                  "b": rgb & 0xFF}})
+                elif st.get("tempK"):
+                    control(dev, key, lan,
+                            {"type": "devices.capabilities.color_setting",
+                             "instance": "colorTemperatureK"}, st["tempK"],
+                            "colorwc", {"colorTemInKelvin": st["tempK"]})
+                return f"{nm}: on {st.get('brightness')}%"
+            except Exception as e:
+                return f"{nm}: error ({e})"
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max(1, len(p["bulbs"]))) as ex:
+            for line in ex.map(apply_one, p["bulbs"].items()):
+                print(line)
+        return
 
     if not args:
         show_status(devices, key)

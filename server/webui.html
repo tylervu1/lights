@@ -136,6 +136,15 @@
   .bulb .st small { font-size: 11px; color: var(--dim); font-weight: 400; }
   .bulb.offline { opacity: .35; }
 
+  /* ----- presets ----- */
+  .prow { display: flex; gap: 8px; margin-top: 14px; }
+  .pin {
+    flex: 1; min-width: 0; background: var(--surf2); border: 0; border-radius: 11px;
+    color: var(--text); font-family: inherit; font-size: 13.5px; padding: 11px 14px;
+    outline: none;
+  }
+  .pin::placeholder { color: var(--dim); }
+
   /* ----- energy ----- */
   .label .modes { margin-left: auto; display: flex; gap: 12px; }
   .label .modes button {
@@ -522,6 +531,75 @@ function RoomCard(title, target, key, withGrid) {
   return { el: card, update };
 }
 
+/* ================= presets ================= */
+let P = null;
+
+function PresetsCard() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="label"><span class="glow"></span><span>Presets</span></div>
+    <div class="chips"></div>
+    <div class="prow">
+      <input class="pin" placeholder="Save current lights as…" enterkeyhint="done">
+      <button class="chip">Save</button>
+    </div>`;
+  const input = $(".pin", card);
+  const doSave = async () => {
+    const name = input.value.trim();
+    if (!name) return;
+    input.value = "";
+    flashStatus("saving preset…");
+    try {
+      const r = await fetch("/api/preset", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({op: "save", name}),
+      });
+      const j = await r.json();
+      flashStatus(j.error ? "⚠ " + j.error : `saved '${name}'`);
+      loadPresets();
+    } catch (e) { flashStatus("⚠ offline?"); }
+  };
+  $(".prow .chip", card).onclick = doSave;
+  input.onkeydown = e => { if (e.key === "Enter") { doSave(); input.blur(); } };
+  const update = () => {
+    const chips = $(".chips", card);
+    chips.replaceChildren();
+    if (!P) return;
+    const names = Object.keys(P);
+    if (!names.length) {
+      chips.innerHTML = `<div class="muted">No presets yet — set the lights how you like, then save.</div>`;
+      return;
+    }
+    for (const name of names) {
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.textContent = name;
+      b.onclick = async () => {
+        touch();
+        flashStatus(`applying '${name}'…`);
+        try {
+          const r = await fetch("/api/preset", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({op: "apply", name}),
+          });
+          const j = await r.json();
+          flashStatus(j.error ? "⚠ " + j.error : `'${name}' applied`);
+          setTimeout(() => load(), 1200);
+        } catch (e) { flashStatus("⚠ offline?"); }
+      };
+      chips.appendChild(b);
+    }
+  };
+  update();
+  return { el: card, update };
+}
+
+function loadPresets() {
+  fetch("/api/presets").then(r => r.json())
+    .then(j => { P = j.presets; paint(); }).catch(() => {});
+}
+
 /* ================= energy ================= */
 let E = null;
 let eMode = "7d";
@@ -655,6 +733,8 @@ function rebuild() {
   views.push(statusView);
   const cards = $("#cards");
   cards.replaceChildren();
+  const pc = PresetsCard();
+  views.push(pc); cards.appendChild(pc.el);
   const byName = Object.fromEntries(S.devices.map(d => [d.name.toLowerCase(), d]));
   const grouped = new Set(), seen = new Set(), rooms = [];
   for (const [room, names] of Object.entries(S.rooms)) {
@@ -684,6 +764,7 @@ function rebuild() {
 async function load(refresh) {
   fetch("/api/energy").then(r => r.json())
     .then(j => { E = j; paint(); }).catch(() => {});
+  if (!P) loadPresets();
   try {
     const r = await fetch("/api/state" + (refresh ? "?refresh=1" : ""));
     const j = await r.json();
