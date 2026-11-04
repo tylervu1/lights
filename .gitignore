@@ -1,0 +1,12 @@
+# personal config & secrets — never commit the API key
+config.env
+rooms.json
+
+# runtime caches & data
+devices-cache.json
+scenes-cache.json
+energy.json
+*.log
+
+__pycache__/
+.DS_Store

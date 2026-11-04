@@ -1,0 +1,5 @@
+{
+  "_note": "Copy to ~/.config/govee/rooms.json. Keys are room names usable as 'lights <room> ...'. Multiple keys can point to the same bulbs (aliases).",
+  "kitchen": ["K1", "K2", "K3", "K4", "K5", "K6"],
+  "bedroom": ["Bulb Name A", "Bulb Name B"]
+}
