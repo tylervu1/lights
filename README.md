@@ -70,11 +70,34 @@ http://<your-ip>:8777/api/go?target=all&action=brightness&value=40
 
 - **iOS Shortcuts / Siri** — make a Shortcut with a single "Get Contents
   of URL" action pointing at one of the above, name it (e.g. "Movie
-  Night"), and Siri runs it. Chain it into automations (arrive home, time
-  of day, etc.).
+  Night"), and Siri runs it. The Shortcut's name is the phrase you say, so
+  "Lights On" → "Hey Siri, lights on." Chain into automations (arrive
+  home, time of day, etc.).
 - **Menu bar (macOS)** — install [SwiftBar](https://swiftbar.app), point
   its plugin folder at `menubar/`, and `lights.30s.sh` adds a menu-bar
   dropdown with per-room toggles, brightness presets, and saved presets.
+
+Tip: point a Shortcut at a **room-scoped preset** so a phrase only affects
+one room. A preset applies to exactly the bulbs stored in it, so a preset
+whose snapshot contains only the bedroom bulbs leaves the rest alone —
+ideal for "lights on" and "bedtime" voice commands.
+
+## Remote access (Tailscale)
+
+The server binds to your LAN, so by default the app only works on home
+wifi. [Tailscale](https://tailscale.com) (free) creates a private
+encrypted network between your own devices, giving the app a permanent
+address that works from anywhere — cellular, the office, travel — with no
+port-forwarding and nothing exposed to the public internet.
+
+1. Install Tailscale on the Mac and on your phone; sign both into the same
+   account.
+2. Find the Mac's Tailscale address: `tailscale ip -4` (a `100.x.y.z`).
+3. On the phone, use `http://<tailscale-ip>:8777` instead of the LAN IP
+   (Add to Home Screen as before). It also works at home, so you can use
+   the one icon everywhere.
+
+The Mac must be awake to answer, same as on the LAN.
 
 ## Notes
 
