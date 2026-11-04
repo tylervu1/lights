@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>Lights</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@200;300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #000000; --surf: #121214; --surf2: #1a1a1d; --inset: #232327;
+    --text: #f5f5f4; --dim: #6e6e74; --faint: #3a3a40;
+    --accent: #ff9f45; --accent-dim: rgba(255,159,69,.13);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Inter Tight", -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px; line-height: 1.4; font-weight: 400;
+    padding: calc(env(safe-area-inset-top) + 26px) 20px calc(env(safe-area-inset-bottom) + 30px);
+    max-width: 480px; margin-inline: auto;
+  }
+
+  header { display: flex; align-items: center; justify-content: space-between; margin: 0 2px 26px; }
+  .brand { font-size: 12px; font-weight: 500; letter-spacing: .22em; text-transform: uppercase; color: var(--dim); }
+  #status { font-size: 12px; font-weight: 400; color: var(--dim); font-variant-numeric: tabular-nums; transition: color .3s; }
+  #status.busy { color: var(--accent); }
+
+  .card {
+    background: var(--surf); border-radius: 28px;
+    padding: 22px 20px 18px; margin-bottom: 14px;
+    animation: in .4s cubic-bezier(.2,.9,.3,1) both;
+  }
+  @keyframes in { from { opacity: 0; transform: translateY(12px); } }
+
+  /* ----- head: tiny label, giant numeral ----- */
+  .head { display: flex; align-items: flex-start; gap: 14px; }
+  .head .tt { flex: 1; min-width: 0; }
+  .label {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11.5px; font-weight: 500; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--dim);
+  }
+  .glow { width: 7px; height: 7px; border-radius: 50%; background: var(--faint);
+    transition: background .35s, box-shadow .35s; }
+  .glow.lit { background: var(--c); box-shadow: 0 0 9px 1px var(--c); }
+  .big { display: flex; align-items: baseline; margin-top: 6px; }
+  .big .num {
+    font-size: 58px; font-weight: 200; letter-spacing: -.045em; line-height: 1;
+    font-variant-numeric: tabular-nums; transition: color .3s;
+  }
+  .big .unit { font-size: 22px; font-weight: 300; color: var(--dim); margin-left: 3px; }
+  .big.off .num { color: var(--faint); }
+  .sub { font-size: 12.5px; color: var(--dim); margin-top: 7px; font-variant-numeric: tabular-nums; }
+
+  /* ----- switch ----- */
+  .sw { position: relative; width: 50px; height: 30px; flex: none; cursor: pointer; margin-top: 4px; }
+  .sw .tr { position: absolute; inset: 0; border-radius: 999px; background: var(--inset); transition: background .22s; }
+  .sw.on .tr { background: var(--accent); }
+  .sw .kn {
+    position: absolute; top: 2px; left: 2px; width: 26px; height: 26px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    transition: transform .26s cubic-bezier(.3,1.4,.5,1);
+  }
+  .sw.on .kn { transform: translateX(20px); }
+
+  /* ----- slider ----- */
+  .slider {
+    position: relative; height: 40px; border-radius: 12px; overflow: hidden;
+    background: var(--surf2); margin-top: 18px; touch-action: none; cursor: grab;
+  }
+  .slider .fill {
+    position: absolute; inset: 0; width: 50%;
+    background: linear-gradient(90deg, #c06a1d, var(--accent));
+  }
+  .slider.anim .fill, .slider.anim .mark { transition: width .25s, left .25s; }
+  .slider.temp { background: linear-gradient(90deg, #b96a22, #d9a96c 32%, #e9e2d2 55%, #9fb4d4 82%, #7d99c4); }
+  .slider.temp .fill { display: none; }
+  .slider.temp .mark {
+    position: absolute; top: 4px; bottom: 4px; width: 4px; border-radius: 2px; left: 50%;
+    background: #fff; box-shadow: 0 0 5px rgba(0,0,0,.45); transform: translateX(-2px);
+  }
+
+  /* ----- tabs: quiet text row ----- */
+  .tabs { display: flex; gap: 22px; margin: 20px 4px 0; }
+  .tabs button {
+    border: 0; background: none; padding: 4px 0; cursor: pointer; font-family: inherit;
+    font-size: 13px; font-weight: 500; letter-spacing: .04em; color: var(--dim);
+    border-bottom: 1.5px solid transparent; transition: color .2s, border-color .2s;
+  }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+
+  .pane { animation: fade .22s both; }
+  @keyframes fade { from { opacity: 0; } }
+
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 14px 1px 2px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips.wrap { flex-wrap: wrap; max-height: 178px; overflow-y: auto; }
+  .chip {
+    flex: none; border: 1px solid var(--inset); background: transparent;
+    color: var(--text); font-family: inherit; font-size: 12.5px; font-weight: 450;
+    padding: 9px 14px; border-radius: 999px; cursor: pointer;
+    transition: transform .12s, background .2s, border-color .2s, color .2s;
+  }
+  .chip:active { transform: scale(.93); }
+  .chip.sel { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  .chip.dot { width: 34px; height: 34px; padding: 0; border: 2px solid var(--inset); }
+  .muted { color: var(--dim); font-size: 12.5px; padding: 14px 4px 4px; }
+
+  .wheelwrap { display: flex; justify-content: center; padding: 16px 0 4px; }
+  .wheel { position: relative; width: 186px; height: 186px; touch-action: none; }
+  .wheel canvas { width: 100%; height: 100%; border-radius: 50%; display: block; }
+  .wheel .dot {
+    position: absolute; width: 24px; height: 24px; border-radius: 50%;
+    border: 2.5px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5);
+    transform: translate(-50%,-50%); pointer-events: none; background: var(--c, #fff);
+  }
+
+  .bulbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; }
+  .bulb {
+    border-radius: 14px; padding: 11px 12px; background: var(--surf2);
+    cursor: pointer; min-width: 0; transition: background .25s, transform .12s;
+  }
+  .bulb:active { transform: scale(.96); }
+  .bulb.on { background: var(--accent-dim); }
+  .bulb .nm {
+    font-size: 10.5px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .bulb.on .nm { color: var(--accent); }
+  .bulb .st { font-size: 17px; font-weight: 300; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .bulb .st small { font-size: 11px; color: var(--dim); font-weight: 400; }
+  .bulb.offline { opacity: .35; }
+
+  #ovl {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 40;
+    opacity: 0; pointer-events: none; transition: opacity .24s;
+  }
+  #ovl.show { opacity: 1; pointer-events: auto; }
+  #sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    max-width: 480px; margin-inline: auto;
+    background: #151517; border-radius: 26px 26px 0 0;
+    padding: 10px 20px calc(env(safe-area-inset-bottom) + 24px);
+    transform: translateY(105%); transition: transform .3s cubic-bezier(.25,1,.4,1);
+    max-height: 84vh; overflow-y: auto;
+  }
+  #sheet.show { transform: none; }
+  #sheet .grab { width: 36px; height: 4px; border-radius: 2px; background: var(--inset); margin: 6px auto 16px; }
+
+  footer { text-align: center; margin-top: 18px; }
+  footer button {
+    border: 1px solid var(--inset); background: none; color: var(--dim); font-family: inherit;
+    font-size: 11.5px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+    padding: 9px 18px; border-radius: 999px; cursor: pointer;
+  }
+  .skel { height: 170px; border-radius: 28px; margin-bottom: 14px; background: var(--surf);
+    animation: pulse 1.2s ease-in-out infinite alternate; }
+  @keyframes pulse { from { opacity: .4; } to { opacity: 1; } }
+</style>
+</head>
+<body>
+<header><div class="brand">Lights</div><div id="status">—</div></header>
+<div id="cards"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+<footer><button id="rescan">Re-scan</button></footer>
+<div id="ovl"></div>
+<div id="sheet"></div>
+
+<script>
+"use strict";
+const $ = (s, el=document) => el.querySelector(s);
+
+/* ================= store ================= */
+const S = { rooms: {}, devices: [] };
+let sig = "";
+let lastTouch = 0;
+const touch = () => lastTouch = Date.now();
+const views = [];
+const sceneCache = new Map();
+const lastScene = new Map();
+
+function bulbsFor(target) {
+  if (target === "all") return S.devices;
+  const names = S.rooms[target];
+  if (names) {
+    const set = new Set(names.map(n => n.toLowerCase()));
+    return S.devices.filter(d => set.has(d.name.toLowerCase()));
+  }
+  return S.devices.filter(d => d.name.toLowerCase() === target.toLowerCase());
+}
+
+function optimistic(target, action, value) {
+  for (const d of bulbsFor(target)) {
+    if (action === "power") d.power = !!value;
+    else if (action === "brightness") { d.brightness = value; d.power = true; }
+    else if (action === "temp") { d.tempK = value; d.colorRgb = null; d.power = true; }
+    else if (action === "color") { d.colorRgb = value; d.tempK = null; d.power = true; }
+    else if (action === "scene") d.power = true;
+  }
+}
+
+function paint() { for (const v of views) v.update(); }
+
+async function send(target, action, value) {
+  touch();
+  optimistic(target, action, value);
+  paint();
+  try {
+    const r = await fetch("/api/control", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({target, action, value}),
+    });
+    const j = await r.json();
+    if (j.error) flashStatus("⚠ " + j.error);
+  } catch (e) { flashStatus("⚠ offline?"); }
+}
+
+/* ================= colors ================= */
+function kelvinCss(k) {
+  k /= 100;
+  const r = k <= 66 ? 255 : Math.min(255, 329.7 * (k - 60) ** -0.133);
+  const g = k <= 66 ? Math.min(255, 99.47 * Math.log(k) - 161.1)
+                    : Math.min(255, 288.1 * (k - 60) ** -0.0755);
+  const b = k >= 66 ? 255 : k <= 19 ? 0 : Math.min(255, 138.5 * Math.log(k - 10) - 305);
+  return `rgb(${r|0},${Math.max(0,g)|0},${Math.max(0,b)|0})`;
+}
+const rgbCss = v => "#" + v.toString(16).padStart(6, "0");
+function hsvToRgb(h, s, v) {
+  const f = n => { const k = (n + h / 60) % 6;
+    return Math.round((v - v * s * Math.max(0, Math.min(k, 4 - k, 1))) * 255); };
+  return [f(5), f(3), f(1)];
+}
+function glowOf(bulbs) {
+  const on = bulbs.find(b => b.power);
+  if (!on) return null;
+  if (on.colorRgb) return rgbCss(on.colorRgb);
+  if (on.tempK) return kelvinCss(on.tempK);
+  return "#ffc66e";
+}
+
+/* ================= widgets ================= */
+function Switch(get, set) {
+  const el = document.createElement("div");
+  el.className = "sw";
+  el.innerHTML = `<div class="tr"></div><div class="kn"></div>`;
+  el.onclick = () => set(!get());
+  return { el, update() { el.classList.toggle("on", !!get()); } };
+}
+
+function Slider({min, max, temp, get, commit, live}) {
+  const el = document.createElement("div");
+  el.className = "slider anim" + (temp ? " temp" : "");
+  el.innerHTML = temp ? `<div class="mark"></div>` : `<div class="fill"></div>`;
+  let cur = get() ?? min, dragging = false;
+  const draw = () => {
+    const p = (cur - min) / (max - min);
+    if (temp) $(".mark", el).style.left = `calc(${(p*100).toFixed(1)}% - 2px)`;
+    else $(".fill", el).style.width = (p * 100).toFixed(1) + "%";
+  };
+  draw();
+  const fromX = x => {
+    const r = el.getBoundingClientRect();
+    cur = Math.round(min + Math.max(0, Math.min(1, (x - r.left) / r.width)) * (max - min));
+    draw();
+    if (live) live(cur);
+  };
+  el.onpointerdown = e => { dragging = true; touch(); el.classList.remove("anim");
+    el.setPointerCapture(e.pointerId); fromX(e.clientX); };
+  el.onpointermove = e => { if (dragging) { touch(); fromX(e.clientX); } };
+  el.onpointerup = () => { if (!dragging) return; dragging = false;
+    el.classList.add("anim"); commit(cur); };
+  return { el, update() { if (!dragging) { const v = get(); if (v != null) { cur = v; draw(); } } } };
+}
+
+function Wheel(commit) {
+  const wrap = document.createElement("div");
+  wrap.className = "wheelwrap";
+  wrap.innerHTML = `<div class="wheel"><canvas width="372" height="372"></canvas><div class="dot" style="left:50%;top:20%"></div></div>`;
+  const wheel = $(".wheel", wrap), cv = $("canvas", wrap), dot = $(".dot", wrap);
+  const ctx = cv.getContext("2d"), R = 186;
+  const img = ctx.createImageData(372, 372);
+  for (let y = 0; y < 372; y++) for (let x = 0; x < 372; x++) {
+    const dx = x - R, dy = y - R, d = Math.hypot(dx, dy), i = (y * 372 + x) * 4;
+    if (d > R) continue;
+    const h = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    const [r, g, b] = hsvToRgb(h, Math.min(1, d / R), 1);
+    img.data[i] = r; img.data[i+1] = g; img.data[i+2] = b;
+    img.data[i+3] = d > R - 2 ? 255 * (R - d) / 2 : 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  let last = null, dragging = false;
+  const pick = (cx, cy) => {
+    const r = wheel.getBoundingClientRect();
+    let dx = cx - r.left - r.width / 2, dy = cy - r.top - r.height / 2;
+    const d = Math.hypot(dx, dy), m = r.width / 2;
+    if (d > m) { dx *= m / d; dy *= m / d; }
+    const h = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+    const [rr, gg, bb] = hsvToRgb(h, Math.min(1, Math.hypot(dx, dy) / m), 1);
+    last = (rr << 16) | (gg << 8) | bb;
+    dot.style.left = (50 + dx / r.width * 100) + "%";
+    dot.style.top = (50 + dy / r.height * 100) + "%";
+    dot.style.setProperty("--c", rgbCss(last));
+  };
+  wheel.onpointerdown = e => { dragging = true; touch(); wheel.setPointerCapture(e.pointerId); pick(e.clientX, e.clientY); };
+  wheel.onpointermove = e => { if (dragging) { touch(); pick(e.clientX, e.clientY); } };
+  wheel.onpointerup = () => { if (dragging) { dragging = false; if (last != null) commit(last); } };
+  return wrap;
+}
+
+/* ================= panel ================= */
+const TEMP_PRESETS = [["Candle", 2000], ["Warm", 2700], ["Neutral", 4000], ["Cool", 6500]];
+const SWATCHES = ["#ff4d3a","#ff8a3d","#ffd23d","#6ee07a","#3dd1ff","#5a7bff","#b05aff","#ff5ad0","#ffffff"];
+const tabMemory = {};
+
+function Panel(title, target, key) {
+  const root = document.createElement("div");
+  const bulbs = () => bulbsFor(target);
+
+  const head = document.createElement("div");
+  head.className = "head";
+  const tt = document.createElement("div");
+  tt.className = "tt";
+  tt.innerHTML = `
+    <div class="label"><span class="glow"></span><span>${title}</span></div>
+    <div class="big"><span class="num">—</span><span class="unit">%</span></div>
+    <div class="sub"></div>`;
+  const sw = Switch(() => bulbs().some(b => b.power),
+                    on => send(target, "power", on));
+  head.append(tt, sw.el);
+  root.appendChild(head);
+
+  const numEl = $(".num", tt), bigEl = $(".big", tt);
+  const setNum = v => numEl.textContent = v ?? "—";
+
+  const bright = Slider({
+    min: 1, max: 100,
+    get: () => Math.max(...bulbs().map(b => b.brightness ?? 0), 0) || null,
+    live: v => setNum(v),
+    commit: v => send(target, "brightness", v),
+  });
+  root.appendChild(bright.el);
+
+  const tabs = document.createElement("div");
+  tabs.className = "tabs";
+  const pane = document.createElement("div");
+  pane.className = "pane";
+  let tempSlider = null;
+
+  const makeWhite = () => {
+    const d = document.createElement("div");
+    tempSlider = Slider({
+      min: 2000, max: 9000, temp: true,
+      get: () => bulbs().find(b => b.tempK)?.tempK ?? null,
+      commit: v => send(target, "temp", v),
+    });
+    d.appendChild(tempSlider.el);
+    const c = document.createElement("div");
+    c.className = "chips";
+    for (const [n, k] of TEMP_PRESETS) {
+      const b = document.createElement("button");
+      b.className = "chip"; b.textContent = n;
+      b.onclick = () => { send(target, "temp", k); tempSlider.update(); };
+      c.appendChild(b);
+    }
+    d.appendChild(c);
+    return d;
+  };
+  const makeColor = () => {
+    const d = document.createElement("div");
+    d.appendChild(Wheel(rgb => send(target, "color", rgb)));
+    const c = document.createElement("div");
+    c.className = "chips";
+    for (const hex of SWATCHES) {
+      const b = document.createElement("button");
+      b.className = "chip dot"; b.style.background = hex;
+      b.onclick = () => send(target, "color", parseInt(hex.slice(1), 16));
+      c.appendChild(b);
+    }
+    d.appendChild(c);
+    return d;
+  };
+  const makeScenes = () => {
+    const d = document.createElement("div");
+    d.innerHTML = `<div class="muted">loading scenes…</div>`;
+    const ref = bulbs()[0];
+    if (!ref) return d;
+    (sceneCache.has(ref.sku) ? Promise.resolve(sceneCache.get(ref.sku))
+      : fetch(`/api/scenes?sku=${encodeURIComponent(ref.sku)}&device=${encodeURIComponent(ref.id)}`)
+          .then(r => r.json()).then(j => { sceneCache.set(ref.sku, j.scenes || []); return j.scenes || []; })
+    ).then(scenes => {
+      d.replaceChildren();
+      if (!scenes.length) { d.innerHTML = `<div class="muted">No scenes for this bulb.</div>`; return; }
+      const c = document.createElement("div");
+      c.className = "chips wrap";
+      for (const s of scenes) {
+        const b = document.createElement("button");
+        b.className = "chip" + (lastScene.get(target) === s.name ? " sel" : "");
+        b.textContent = s.name + (s.instance === "diyScene" ? " ✦" : "");
+        b.onclick = () => {
+          lastScene.set(target, s.name);
+          c.querySelectorAll(".chip").forEach(x => x.classList.remove("sel"));
+          b.classList.add("sel");
+          send(target, "scene", {value: s.value, instance: s.instance});
+        };
+        c.appendChild(b);
+      }
+      d.appendChild(c);
+    }).catch(() => { d.innerHTML = `<div class="muted">Couldn't load scenes.</div>`; });
+    return d;
+  };
+  const makers = { White: makeWhite, Color: makeColor, Scenes: makeScenes };
+  const show = n => {
+    tabMemory[key] = n;
+    tabs.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.textContent === n));
+    tempSlider = null;
+    pane.replaceChildren(makers[n]());
+  };
+  for (const n of Object.keys(makers)) {
+    const b = document.createElement("button");
+    b.textContent = n; b.onclick = () => show(n);
+    tabs.appendChild(b);
+  }
+  root.append(tabs, pane);
+  show(tabMemory[key] || "White");
+
+  const update = () => {
+    const bs = bulbs();
+    const c = glowOf(bs);
+    const glow = $(".glow", tt);
+    glow.classList.toggle("lit", !!c);
+    glow.style.setProperty("--c", c || "transparent");
+    const anyOn = bs.some(b => b.power);
+    bigEl.classList.toggle("off", !anyOn);
+    setNum(anyOn ? (Math.max(...bs.map(b => b.brightness ?? 0), 0) || "—") : "—");
+    const on = bs.filter(b => b.power).length;
+    const temp = bs.find(b => b.tempK)?.tempK;
+    $(".sub", tt).textContent = bs.length === 1
+      ? (bs[0].power ? "on" : "off") + (temp ? ` · ${temp}K` : "") + (bs[0].lan ? " · lan" : "")
+      : `${on} of ${bs.length} on` + (temp && anyOn ? ` · ${temp}K` : "");
+    sw.update(); bright.update();
+    if (tempSlider) tempSlider.update();
+  };
+  update();
+  return { el: root, update };
+}
+
+/* ================= cards ================= */
+function RoomCard(title, target, key, withGrid) {
+  const card = document.createElement("div");
+  card.className = "card";
+  const p = Panel(title, target, key);
+  card.appendChild(p.el);
+  let cells = new Map();
+  if (withGrid) {
+    const grid = document.createElement("div");
+    grid.className = "bulbs";
+    for (const b of bulbsFor(target)) {
+      const cell = document.createElement("div");
+      cell.className = "bulb";
+      cell.innerHTML = `<div class="nm"></div><div class="st"></div>`;
+      cell.onclick = () => openSheet(b.id);
+      cells.set(b.id, cell);
+      grid.appendChild(cell);
+    }
+    card.appendChild(grid);
+  }
+  const update = () => {
+    p.update();
+    for (const [id, cell] of cells) {
+      const b = S.devices.find(d => d.id === id);
+      if (!b) continue;
+      cell.classList.toggle("on", !!b.power);
+      cell.classList.toggle("offline", b.online === false);
+      $(".nm", cell).textContent = b.name;
+      $(".st", cell).innerHTML = b.power
+        ? `${b.brightness ?? "–"}<small>%</small>` : `<small>off</small>`;
+    }
+  };
+  update();
+  return { el: card, update };
+}
+
+let sheetView = null;
+function openSheet(id) {
+  const b = S.devices.find(d => d.id === id);
+  if (!b) return;
+  const sheet = $("#sheet");
+  sheet.replaceChildren();
+  const grab = document.createElement("div");
+  grab.className = "grab";
+  sheet.appendChild(grab);
+  sheetView = Panel(b.name, b.name, "bulb:" + id);
+  sheet.appendChild(sheetView.el);
+  $("#ovl").classList.add("show");
+  sheet.classList.add("show");
+}
+function closeSheet() {
+  $("#ovl").classList.remove("show");
+  $("#sheet").classList.remove("show");
+  sheetView = null;
+}
+$("#ovl").onclick = closeSheet;
+
+function flashStatus(msg) {
+  const st = $("#status");
+  st.textContent = msg; st.classList.add("busy");
+  clearTimeout(st._h);
+  st._h = setTimeout(() => { st.classList.remove("busy"); statusView.update(); }, 1800);
+}
+const statusView = { update() {
+  const on = S.devices.filter(d => d.power).length;
+  $("#status").textContent = S.devices.length ? `${on} of ${S.devices.length} on` : "—";
+}};
+
+function rebuild() {
+  views.length = 0;
+  views.push(statusView);
+  const cards = $("#cards");
+  cards.replaceChildren();
+  const byName = Object.fromEntries(S.devices.map(d => [d.name.toLowerCase(), d]));
+  const grouped = new Set(), seen = new Set(), rooms = [];
+  for (const [room, names] of Object.entries(S.rooms)) {
+    const bulbs = names.map(n => byName[n.toLowerCase()]).filter(Boolean);
+    if (!bulbs.length) continue;
+    const s = bulbs.map(b => b.id).sort().join();
+    if (seen.has(s)) continue;
+    seen.add(s);
+    bulbs.forEach(b => grouped.add(b.id));
+    rooms.push([room, bulbs]);
+  }
+  for (const [room] of rooms) {
+    const c = RoomCard(room, room, "room:" + room, true);
+    views.push(c); cards.appendChild(c.el);
+  }
+  for (const d of S.devices.filter(d => !grouped.has(d.id))) {
+    const c = RoomCard(d.name, d.name, "bulb:" + d.id, false);
+    views.push(c); cards.appendChild(c.el);
+  }
+  if (sheetView) views.push(sheetView);
+  statusView.update();
+}
+
+/* ================= sync ================= */
+async function load(refresh) {
+  try {
+    const r = await fetch("/api/state" + (refresh ? "?refresh=1" : ""));
+    const j = await r.json();
+    if (Date.now() - lastTouch < 3000 && !refresh && sig) return;
+    S.rooms = j.rooms; S.devices = j.devices;
+    const s = JSON.stringify([Object.keys(j.rooms), j.devices.map(d => d.id + d.name).sort()]);
+    if (s !== sig) { sig = s; rebuild(); }
+    else { if (sheetView && !views.includes(sheetView)) views.push(sheetView); paint(); }
+  } catch (e) { flashStatus("server unreachable"); }
+}
+$("#rescan").onclick = () => { flashStatus("re-scanning…"); load(true); };
+load();
+setInterval(() => load(), 15000);
+</script>
+</body>
+</html>
