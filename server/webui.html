@@ -136,6 +136,29 @@
   .bulb .st small { font-size: 11px; color: var(--dim); font-weight: 400; }
   .bulb.offline { opacity: .35; }
 
+  /* ----- energy ----- */
+  .bars { display: flex; gap: 8px; height: 104px; margin-top: 20px; }
+  .bars .col { flex: 1; display: flex; flex-direction: column; gap: 7px; cursor: pointer; min-width: 0; }
+  .bars .barbox { flex: 1; display: flex; align-items: flex-end; }
+  .bars .bar {
+    width: 100%; border-radius: 4px 4px 0 0; background: var(--accent);
+    opacity: .38; min-height: 3px; transition: height .4s, opacity .2s;
+  }
+  .bars .bar.today { opacity: .95; }
+  .bars .col:active .bar { opacity: 1; }
+  .bars .d {
+    font-size: 9.5px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--dim); text-align: center;
+  }
+  .chartsub { font-size: 12px; color: var(--dim); margin-top: 10px; min-height: 16px; font-variant-numeric: tabular-nums; }
+  .erows { margin-top: 10px; }
+  .erow {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 9px 2px; border-top: 1px solid var(--surf2); font-size: 13.5px;
+  }
+  .erow .en { text-transform: capitalize; }
+  .erow .ev { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+
   #ovl {
     position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 40;
     opacity: 0; pointer-events: none; transition: opacity .24s;
@@ -484,6 +507,72 @@ function RoomCard(title, target, key, withGrid) {
   return { el: card, update };
 }
 
+/* ================= energy ================= */
+let E = null;
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function EnergyCard() {
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="head"><div class="tt">
+      <div class="label"><span class="glow"></span><span>Energy</span></div>
+      <div class="big"><span class="num">—</span><span class="unit">Wh</span></div>
+      <div class="sub">estimated · tracking just started</div>
+    </div></div>
+    <div class="bars"></div>
+    <div class="chartsub"></div>
+    <div class="erows"></div>`;
+  const update = () => {
+    if (!E) return;
+    const cost = w => "$" + (w / 1000 * E.rate).toFixed(2);
+    const kwh = E.today_wh >= 1000;
+    $(".num", card).textContent = kwh ? (E.today_wh / 1000).toFixed(2) : Math.round(E.today_wh);
+    $(".unit", card).textContent = kwh ? "kWh" : "Wh";
+    $(".sub", card).textContent =
+      `${cost(E.today_wh)} today · ${cost(E.week_wh)} this week · ${cost(E.month_wh)} this month · est.`;
+    const bars = $(".bars", card);
+    bars.replaceChildren();
+    const max = Math.max(...E.days.map(d => d.wh), 1);
+    E.days.forEach((d, i) => {
+      const col = document.createElement("div");
+      col.className = "col";
+      col.innerHTML = `<div class="barbox"><div class="bar${i === E.days.length - 1 ? " today" : ""}"
+        style="height:${Math.max(3, d.wh / max * 100).toFixed(1)}%"></div></div>
+        <div class="d">${DOW[new Date(d.date + "T12:00").getDay()]}</div>`;
+      col.onclick = () => $(".chartsub", card).textContent =
+        `${d.date} · ${Math.round(d.wh)} Wh · ${cost(d.wh)}`;
+      bars.appendChild(col);
+    });
+    const rows = $(".erows", card);
+    rows.replaceChildren();
+    const byName = Object.fromEntries(
+      Object.values(E.per_bulb).map(b => [b.name.toLowerCase(), b]));
+    const seen = new Set(), entries = [];
+    for (const [room, names] of Object.entries(S.rooms)) {
+      const bs = names.map(n => byName[n.toLowerCase()]).filter(Boolean);
+      if (!bs.length) continue;
+      const sig2 = bs.map(b => b.name).sort().join();
+      if (seen.has(sig2)) continue;
+      seen.add(sig2);
+      bs.forEach(b => seen.add("b:" + b.name));
+      entries.push([room, bs]);
+    }
+    for (const b of Object.values(E.per_bulb).filter(b => !seen.has("b:" + b.name)))
+      entries.push([b.name, [b]]);
+    for (const [label, bs] of entries) {
+      const wh = bs.reduce((a, b) => a + b.today_wh, 0);
+      const row = document.createElement("div");
+      row.className = "erow";
+      row.innerHTML = `<span class="en">${label}</span>
+        <span class="ev">${Math.round(wh)} Wh · ${cost(wh)} today</span>`;
+      rows.appendChild(row);
+    }
+  };
+  update();
+  return { el: card, update };
+}
+
 let sheetView = null;
 function openSheet(id) {
   const b = S.devices.find(d => d.id === id);
@@ -540,12 +629,16 @@ function rebuild() {
     const c = RoomCard(d.name, d.name, "bulb:" + d.id, false);
     views.push(c); cards.appendChild(c.el);
   }
+  const en = EnergyCard();
+  views.push(en); cards.appendChild(en.el);
   if (sheetView) views.push(sheetView);
   statusView.update();
 }
 
 /* ================= sync ================= */
 async function load(refresh) {
+  fetch("/api/energy").then(r => r.json())
+    .then(j => { E = j; paint(); }).catch(() => {});
   try {
     const r = await fetch("/api/state" + (refresh ? "?refresh=1" : ""));
     const j = await r.json();

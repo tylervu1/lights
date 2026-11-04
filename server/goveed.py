@@ -36,6 +36,24 @@ def api_key():
 
 KEY = api_key()
 
+# ---- energy model (H6008: ~9 W at full brightness, ~0.5 W wifi standby) ----
+ENERGY_FILE = os.path.join(CONF_DIR, "energy.json")
+STANDBY_W = 0.5
+MAX_W = 9.0
+
+
+def kwh_rate():
+    try:
+        with open(os.path.join(CONF_DIR, "config.env")) as f:
+            for line in f:
+                if line.strip().startswith("KWH_RATE="):
+                    return float(line.strip().split("=", 1)[1])
+    except (OSError, ValueError):
+        pass
+    return 0.30  # $/kWh default; set KWH_RATE= in config.env to override
+
+
+RATE = kwh_rate()
 
 
 def api_call(path, body=None):
@@ -148,6 +166,134 @@ def lan_send(ip, cmd, data):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.sendto(json.dumps({"msg": {"cmd": cmd, "data": data}}).encode(),
              (ip, 4003))
+
+
+# ---- energy tracking ----
+# Believed per-bulb state: updated instantly by every control command and
+# reconciled against the cloud every 5 min; integrated into hourly Wh bins.
+
+_energy_lock = threading.Lock()
+_believed = {}  # device_id -> {"power", "brightness", "online"}
+
+
+def update_believed(states):
+    for s in states:
+        if "error" not in s:
+            _believed[s["id"]] = {"power": s["power"],
+                                  "brightness": s["brightness"],
+                                  "online": s["online"]}
+
+
+def believed_apply_control(devs, action, value):
+    for d in devs:
+        b = _believed.setdefault(d["device"],
+                                 {"power": None, "brightness": None,
+                                  "online": True})
+        if action == "power":
+            b["power"] = bool(value)
+        elif action == "brightness":
+            b["brightness"] = int(value)
+            b["power"] = True
+        elif action in ("temp", "color", "scene"):
+            b["power"] = True
+
+
+def watts_of(b):
+    # Govee's "online" flag is flaky (bulbs report offline while happily
+    # executing commands), so a reported power=on always counts.
+    if b.get("power"):
+        return STANDBY_W + ((b.get("brightness") or 100) / 100) * (MAX_W - STANDBY_W)
+    if b.get("online") is False:
+        return 0.0  # off and unreachable: likely no mains power
+    if b.get("power") is False:
+        return STANDBY_W
+    return None  # state never observed yet
+
+
+def _load_energy():
+    try:
+        with open(ENERGY_FILE) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def energy_loop():
+    last = time.time()
+    last_poll = 0.0
+    while True:
+        time.sleep(60)
+        now = time.time()
+        dt, last = now - last, now
+        if now - last_poll > 300:
+            try:
+                devices = get_devices()
+                ips = lan_ips()
+                with ThreadPoolExecutor(max_workers=max(1, len(devices))) as ex:
+                    update_believed(list(ex.map(lambda d: state_one(d, ips),
+                                                devices)))
+                last_poll = now
+            except Exception:
+                pass
+        with _energy_lock:
+            data = _load_energy()
+            hour = time.strftime("%Y-%m-%dT%H")
+            bin_ = data.setdefault(hour, {})
+            for dev_id, b in _believed.items():
+                w = watts_of(b)
+                if w is not None:
+                    bin_[dev_id] = round(bin_.get(dev_id, 0) + w * dt / 3600, 4)
+            cut = time.strftime("%Y-%m-%dT%H", time.localtime(now - 60 * 86400))
+            data = {k: v for k, v in data.items() if k >= cut}
+            try:
+                with open(ENERGY_FILE, "w") as f:
+                    json.dump(data, f)
+            except OSError:
+                pass
+
+
+def energy_summary():
+    with _energy_lock:
+        data = _load_energy()
+    try:
+        names = {d["device"]: d["deviceName"] for d in get_devices()}
+    except Exception:
+        names = {}
+    daily = {}
+    for hour, devs in data.items():
+        db = daily.setdefault(hour[:10], {})
+        for dev, wh in devs.items():
+            db[dev] = db.get(dev, 0) + wh
+    days = []
+    for i in range(6, -1, -1):
+        date = time.strftime("%Y-%m-%d", time.localtime(time.time() - i * 86400))
+        days.append({"date": date,
+                     "wh": round(sum(daily.get(date, {}).values()), 2)})
+
+    def tot(dates):
+        out = {}
+        for dt_ in dates:
+            for dev, wh in daily.get(dt_, {}).items():
+                out[dev] = out.get(dev, 0) + wh
+        return out
+
+    month_dates = [time.strftime("%Y-%m-%d",
+                                 time.localtime(time.time() - i * 86400))
+                   for i in range(30)]
+    tt = daily.get(time.strftime("%Y-%m-%d"), {})
+    tw = tot(d["date"] for d in days)
+    tm = tot(month_dates)
+    per_bulb = {dev: {"name": names.get(dev, dev),
+                      "today_wh": round(tt.get(dev, 0), 2),
+                      "week_wh": round(tw.get(dev, 0), 2),
+                      "month_wh": round(tm.get(dev, 0), 2)}
+                for dev in names}
+    return {"rate": RATE,
+            "today_wh": round(sum(tt.values()), 2),
+            "week_wh": round(sum(tw.values()), 2),
+            "month_wh": round(sum(tm.values()), 2),
+            "days": days, "per_bulb": per_bulb,
+            "since": min(data) if data else None}
 
 
 # ---- command plumbing ----
@@ -264,7 +410,10 @@ class Handler(BaseHTTPRequestHandler):
             ips = lan_ips()
             with ThreadPoolExecutor(max_workers=max(1, len(devices))) as ex:
                 states = list(ex.map(lambda d: state_one(d, ips), devices))
+            update_believed(states)
             self._json({"rooms": load_rooms(), "devices": states})
+        elif url.path == "/api/energy":
+            self._json(energy_summary())
         elif url.path == "/api/scenes":
             q = urllib.parse.parse_qs(url.query)
             try:
@@ -290,6 +439,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": f"no match for {req['target']}"}, 404)
                 return
             ips = lan_ips()
+            believed_apply_control(devices, req["action"], req.get("value"))
             with ThreadPoolExecutor(max_workers=len(devices)) as ex:
                 results = list(ex.map(
                     lambda d: {"name": d["deviceName"],
@@ -300,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    threading.Thread(target=energy_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"goveed listening on :{PORT}")
     srv.serve_forever()
