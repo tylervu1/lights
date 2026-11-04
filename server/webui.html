@@ -137,6 +137,21 @@
   .bulb.offline { opacity: .35; }
 
   /* ----- energy ----- */
+  .label .modes { margin-left: auto; display: flex; gap: 12px; }
+  .label .modes button {
+    border: 0; background: none; padding: 0; cursor: pointer; font-family: inherit;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .16em; color: var(--faint);
+    text-transform: uppercase; transition: color .2s;
+  }
+  .label .modes button.on { color: var(--accent); }
+  .estats { display: flex; gap: 18px; margin-top: 16px; }
+  .estat { flex: 1; min-width: 0; }
+  .estat .ev2 { font-size: 16px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .estat .ev2 .up { color: var(--accent); }
+  .estat .el2 {
+    font-size: 10px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
   .bars { display: flex; gap: 8px; height: 104px; margin-top: 20px; }
   .bars .col { flex: 1; display: flex; flex-direction: column; gap: 7px; cursor: pointer; min-width: 0; }
   .bars .barbox { flex: 1; display: flex; align-items: flex-end; }
@@ -509,6 +524,7 @@ function RoomCard(title, target, key, withGrid) {
 
 /* ================= energy ================= */
 let E = null;
+let eMode = "7d";
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function EnergyCard() {
@@ -516,13 +532,20 @@ function EnergyCard() {
   card.className = "card";
   card.innerHTML = `
     <div class="head"><div class="tt">
-      <div class="label"><span class="glow"></span><span>Energy</span></div>
+      <div class="label"><span class="glow"></span><span>Energy</span>
+        <span class="modes">
+          <button data-m="7d" class="on">7 days</button>
+          <button data-m="24h">24 hrs</button>
+        </span></div>
       <div class="big"><span class="num">—</span><span class="unit">Wh</span></div>
       <div class="sub">estimated · tracking just started</div>
     </div></div>
     <div class="bars"></div>
     <div class="chartsub"></div>
+    <div class="estats"></div>
     <div class="erows"></div>`;
+  card.querySelectorAll(".modes button").forEach(b =>
+    b.onclick = () => { eMode = b.dataset.m; update(); });
   const update = () => {
     if (!E) return;
     const cost = w => "$" + (w / 1000 * E.rate).toFixed(2);
@@ -531,19 +554,41 @@ function EnergyCard() {
     $(".unit", card).textContent = kwh ? "kWh" : "Wh";
     $(".sub", card).textContent =
       `${cost(E.today_wh)} today · ${cost(E.week_wh)} this week · ${cost(E.month_wh)} this month · est.`;
+    card.querySelectorAll(".modes button").forEach(b =>
+      b.classList.toggle("on", b.dataset.m === eMode));
     const bars = $(".bars", card);
     bars.replaceChildren();
-    const max = Math.max(...E.days.map(d => d.wh), 1);
-    E.days.forEach((d, i) => {
+    const series = eMode === "7d"
+      ? E.days.slice(7).map((d, i, a) => ({
+          lab: DOW[new Date(d.date + "T12:00").getDay()], wh: d.wh,
+          now: i === a.length - 1,
+          detail: `${d.date} · ${Math.round(d.wh)} Wh · ${cost(d.wh)}`}))
+      : E.hours.map((h, i, a) => ({
+          lab: i % 4 === 3 ? h.h : "", wh: h.wh, now: i === a.length - 1,
+          detail: `${h.h}:00 · ${Math.round(h.wh * 10) / 10} Wh`}));
+    const max = Math.max(...series.map(s => s.wh), 0.1);
+    for (const s of series) {
       const col = document.createElement("div");
       col.className = "col";
-      col.innerHTML = `<div class="barbox"><div class="bar${i === E.days.length - 1 ? " today" : ""}"
-        style="height:${Math.max(3, d.wh / max * 100).toFixed(1)}%"></div></div>
-        <div class="d">${DOW[new Date(d.date + "T12:00").getDay()]}</div>`;
-      col.onclick = () => $(".chartsub", card).textContent =
-        `${d.date} · ${Math.round(d.wh)} Wh · ${cost(d.wh)}`;
+      col.innerHTML = `<div class="barbox"><div class="bar${s.now ? " today" : ""}"
+        style="height:${Math.max(3, s.wh / max * 100).toFixed(1)}%"></div></div>
+        <div class="d">${s.lab}</div>`;
+      col.onclick = () => $(".chartsub", card).textContent = s.detail;
       bars.appendChild(col);
-    });
+    }
+    const thisW = E.days.slice(7).reduce((a, d) => a + d.wh, 0);
+    const lastW = E.days.slice(0, 7).reduce((a, d) => a + d.wh, 0);
+    const delta = lastW > 0.5
+      ? (thisW >= lastW ? "+" : "") + Math.round((thisW - lastW) / lastW * 100) + "%"
+      : "—";
+    const top = Object.values(E.per_bulb)
+      .sort((a, b) => b.week_wh - a.week_wh)[0];
+    $(".estats", card).innerHTML = `
+      <div class="estat"><div class="ev2">${delta}</div><div class="el2">vs last week</div></div>
+      <div class="estat"><div class="ev2">${top ? Math.round(top.week_wh) + " Wh" : "—"}</div>
+        <div class="el2">top bulb · ${top ? top.name : ""}</div></div>
+      <div class="estat"><div class="ev2">${cost(E.week_wh / 7 * 30)}</div>
+        <div class="el2">est. monthly pace</div></div>`;
     const rows = $(".erows", card);
     rows.replaceChildren();
     const byName = Object.fromEntries(

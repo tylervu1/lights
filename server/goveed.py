@@ -265,10 +265,15 @@ def energy_summary():
         for dev, wh in devs.items():
             db[dev] = db.get(dev, 0) + wh
     days = []
-    for i in range(6, -1, -1):
+    for i in range(13, -1, -1):
         date = time.strftime("%Y-%m-%d", time.localtime(time.time() - i * 86400))
         days.append({"date": date,
                      "wh": round(sum(daily.get(date, {}).values()), 2)})
+    hours = []
+    for i in range(23, -1, -1):
+        hk = time.strftime("%Y-%m-%dT%H", time.localtime(time.time() - i * 3600))
+        hours.append({"h": hk[-2:],
+                      "wh": round(sum(data.get(hk, {}).values()), 2)})
 
     def tot(dates):
         out = {}
@@ -281,7 +286,7 @@ def energy_summary():
                                  time.localtime(time.time() - i * 86400))
                    for i in range(30)]
     tt = daily.get(time.strftime("%Y-%m-%d"), {})
-    tw = tot(d["date"] for d in days)
+    tw = tot(d["date"] for d in days[7:])
     tm = tot(month_dates)
     per_bulb = {dev: {"name": names.get(dev, dev),
                       "today_wh": round(tt.get(dev, 0), 2),
@@ -292,7 +297,7 @@ def energy_summary():
             "today_wh": round(sum(tt.values()), 2),
             "week_wh": round(sum(tw.values()), 2),
             "month_wh": round(sum(tm.values()), 2),
-            "days": days, "per_bulb": per_bulb,
+            "days": days, "hours": hours, "per_bulb": per_bulb,
             "since": min(data) if data else None}
 
 
